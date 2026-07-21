@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Estimate GPU memory, topology, and throughput for local LLM inference." />
+  <meta name="theme-color" content="#202a33" />
+  <meta property="og:title" content="TensorPlan GPU Sizer" />
+  <meta property="og:description" content="Estimate GPU memory, KV cache, topology, and throughput for open-weight LLM deployment." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://terrywangcode.github.io/tensorplan/" />
+  <link rel="canonical" href="https://terrywangcode.github.io/tensorplan/" />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="manifest" href="site.webmanifest" />
+  <title>TensorPlan GPU Sizer</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="product-id">
+      <span class="product-mark">TP</span>
+      <div><strong>TensorPlan</strong><small>LLM GPU deployment calculator</small></div>
+    </div>
+    <div class="header-actions">
+      <span class="status-dot"><i></i>Local calculation</span>
+      <a class="header-link" href="https://github.com/terrywangcode/tensorplan" target="_blank" rel="noopener noreferrer">Source</a>
+      <button class="btn" id="resetBtn">Reset</button>
+      <button class="btn primary" id="exportBtn">Export JSON</button>
+    </div>
+  </header>
+
+  <main class="app-shell">
+    <aside class="config-pane" id="planner">
+      <section class="pane-section model-section">
+        <div class="section-title"><h2>Model</h2><button class="text-btn" id="editModelBtn">Edit configuration</button></div>
+        <label class="field full">
+          <span>Model profile</span>
+          <select id="modelSelect"></select>
+        </label>
+        <div class="model-summary" id="modelSummary"></div>
+        <div class="registry-row">
+          <label class="field full"><span>Load repository configuration</span>
+            <div class="input-action"><input id="modelIdInput" placeholder="Qwen/Qwen3-32B" autocomplete="off" /><button id="lookupBtn">Fetch</button></div>
+          </label>
+          <p id="lookupStatus">ModelScope, then Hugging Face fallback</p>
+        </div>
+      </section>
+
+      <section class="pane-section">
+        <div class="section-title"><h2>Workload</h2><span>Peak reservation</span></div>
+        <div class="preset-row" aria-label="Workload presets">
+          <button class="preset" data-preset="chat">Chat</button>
+          <button class="preset" data-preset="long">Long context</button>
+          <button class="preset" data-preset="api">API server</button>
+          <button class="preset" data-preset="batch">Batch</button>
+        </div>
+        <div class="form-grid">
+          <label class="field"><span>Weight format</span><select id="quantSelect"></select></label>
+          <label class="field"><span>KV-cache format</span><select id="kvSelect"></select></label>
+          <label class="field"><span>Max context / request</span><select id="contextSelect"></select></label>
+          <label class="field"><span>Peak concurrency</span><input id="concurrencyInput" type="number" min="1" max="2048" value="4" /></label>
+          <label class="field"><span>Average live context</span><input id="avgContextInput" type="number" min="128" value="8192" /></label>
+          <label class="field"><span>Output tokens / request</span><input id="outputInput" type="number" min="1" value="512" /></label>
+          <label class="field"><span>Serving runtime</span><select id="runtimeSelect"><option value="vllm">vLLM</option><option value="sglang">SGLang</option><option value="trtllm">TensorRT-LLM</option><option value="llamacpp">llama.cpp</option><option value="generic">Generic runtime</option></select></label>
+          <label class="field"><span>Traffic type</span><select id="trafficSelect"><option value="interactive">Interactive chat</option><option value="balanced">Mixed API</option><option value="batch">Offline batch</option></select></label>
+          <label class="field"><span>Target aggregate tok/s</span><input id="targetTpsInput" type="number" min="0" value="0" /><small>0 = capacity only</small></label>
+          <label class="field"><span>Usable VRAM</span><select id="utilSelect"><option value="0.85">85% conservative</option><option value="0.90" selected>90% standard</option><option value="0.94">94% aggressive</option></select></label>
+        </div>
+      </section>
+
+      <section class="pane-section">
+        <div class="section-title"><h2>Hardware constraint</h2><span>Optional</span></div>
+        <div class="form-grid">
+          <label class="field full"><span>GPU</span><select id="gpuSelect"></select></label>
+          <label class="field"><span>Interconnect</span><select id="linkSelect"><option value="auto">Use GPU default</option><option value="nvlink">NVLink / NVSwitch</option><option value="pcie">PCIe only</option><option value="rocm">Infinity Fabric / ROCm</option></select></label>
+          <label class="field"><span>Preferred maximum GPUs</span><select id="maxGpuSelect"><option>1</option><option>2</option><option>4</option><option selected>8</option><option>16</option><option>32</option><option>64</option></select><small>Results still report the actual requirement if exceeded</small></label>
+        </div>
+      </section>
+    </aside>
+
+    <section class="results-pane" id="results">
+      <div class="results-header">
+        <div><span class="kicker">Current estimate</span><h1 id="resultTitle">Deployment analysis</h1></div>
+        <div class="results-actions"><span class="confidence" id="confidenceBadge">ESTIMATED PROFILE</span><button class="btn" id="saveScenarioBtn">Save scenario</button></div>
+      </div>
+
+      <section class="deployment-summary">
+        <div class="recommendation-main">
+          <span>Required topology</span>
+          <div><strong id="neededGpu">—</strong><h2 id="topologyText">Select a model</h2></div>
+          <p id="topologyNote">Capacity and throughput sizing</p>
+        </div>
+        <div class="capacity-status">
+          <div><span>Usable VRAM consumed</span><strong id="fitText">—</strong></div>
+          <div class="progress"><i id="fitBar"></i></div>
+          <dl>
+            <div><dt>Total demand</dt><dd id="memoryTotal">—</dd></div>
+            <div><dt>Configuration</dt><dd id="configSummary">—</dd></div>
+          </dl>
+        </div>
+      </section>
+
+      <section class="key-metrics">
+        <div><span>Weights</span><strong id="weightsMetric">—</strong><small id="weightsDetail">including metadata</small></div>
+        <div><span>KV cache</span><strong id="kvMetric">—</strong><small id="kvDetail">at peak reservation</small></div>
+        <div><span>Aggregate decode</span><strong id="tpsMetric">—</strong><small id="tpsDetail">roofline estimate</small></div>
+        <div><span>Per request</span><strong id="userTpsMetric">—</strong><small id="userTpsDetail">fair-share estimate</small></div>
+      </section>
+
+      <div class="results-grid">
+        <section class="tool-panel memory-panel">
+          <div class="panel-title"><h2>Memory allocation</h2><span>Cluster total</span></div>
+          <div class="stacked-bar" id="memoryBar"></div>
+          <div class="legend" id="memoryLegend"></div>
+          <code class="formula" id="memoryFormula"></code>
+        </section>
+        <section class="tool-panel throughput-panel">
+          <div class="panel-title"><h2>Throughput limits</h2><span id="bottleneckBadge">Roofline model</span></div>
+          <div class="limit-row"><span>Compute</span><strong id="computeLimit">—</strong></div>
+          <div class="thin-meter"><i id="computeBar"></i></div>
+          <div class="limit-row"><span>Memory bandwidth</span><strong id="bandwidthLimit">—</strong></div>
+          <div class="thin-meter bandwidth"><i id="bandwidthBar"></i></div>
+          <p id="bottleneckText"></p>
+        </section>
+      </div>
+
+      <section class="tool-panel recommendations">
+        <div class="panel-title"><h2>Hardware candidates</h2><span>Ranked by fit, topology, speed, and GPU count</span></div>
+        <div class="table-header rec-grid"><span>Rank</span><span>Configuration</span><span>VRAM reserve</span><span>Est. decode</span><span>Score</span></div>
+        <div class="recommendation-list" id="recommendationList"></div>
+      </section>
+
+      <section class="tool-panel scenarios-panel">
+        <div class="panel-title"><h2>Saved scenarios</h2><button class="text-btn" id="clearScenariosBtn">Clear</button></div>
+        <div class="empty-state" id="scenarioEmpty">Save the current estimate to compare models, quantization formats, or GPU options.</div>
+        <div class="scenario-table" id="scenarioTable"></div>
+      </section>
+
+      <section class="tool-panel assumptions">
+        <div class="panel-title"><h2>Calculation details</h2><button class="text-btn" id="copyDetailsBtn">Copy summary</button></div>
+        <div class="detail-table" id="detailTable"></div>
+        <div class="warnings" id="warnings"></div>
+        <details class="method-note"><summary>Method and limitations</summary><p>Memory reserves the full configured context for each concurrent request. Decode throughput uses the lower of an active-parameter compute ceiling and a memory-bandwidth ceiling, then applies runtime, batching, and interconnect efficiency. Use this for planning, then benchmark the exact checkpoint and engine before procurement.</p></details>
+      </section>
+    </section>
+  </main>
+
+  <dialog id="modelDialog">
+    <form method="dialog" id="modelConfigForm">
+      <div class="dialog-header"><div><h2>Edit model configuration</h2><p>Override the selected profile for this session.</p></div><button class="close-btn" value="cancel" aria-label="Close">×</button></div>
+      <div class="dialog-grid">
+        <label class="field"><span>Total parameters (B)</span><input id="editParams" type="number" min="0.1" step="0.1" /></label>
+        <label class="field"><span>Active parameters (B)</span><input id="editActive" type="number" min="0.1" step="0.1" /></label>
+        <label class="field"><span>Layers</span><input id="editLayers" type="number" min="1" /></label>
+        <label class="field"><span>Attention heads</span><input id="editHeads" type="number" min="1" /></label>
+        <label class="field"><span>KV heads</span><input id="editKvHeads" type="number" min="1" /></label>
+        <label class="field"><span>Head dimension</span><input id="editHeadDim" type="number" min="1" /></label>
+        <label class="field"><span>Attention-layer fraction</span><input id="editAttentionFactor" type="number" min="0.01" max="1" step="0.01" /></label>
+        <label class="field"><span>Maximum context</span><input id="editMaxContext" type="number" min="128" /></label>
+      </div>
+      <div class="dialog-actions"><button class="btn" value="cancel">Cancel</button><button class="btn primary" id="applyModelConfigBtn" value="default">Apply override</button></div>
+    </form>
+  </dialog>
+  <div class="toast" id="toast"></div>
+  <script src="model-config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "name": "TensorPlan GPU Sizer",
+  "short_name": "TensorPlan",
+  "description": "Estimate GPU requirements for open-weight LLM inference.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f4f5f7",
+  "theme_color": "#202a33",
+  "icons": [{"src":"favicon.svg","sizes":"any","type":"image/svg+xml"}]
+}
