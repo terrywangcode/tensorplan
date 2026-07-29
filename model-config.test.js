@@ -1,5 +1,5 @@
 const assert=require('assert');
-const {normalizeConfig,estimateParams,findRequiredGpuCount,normalizeUtilization}=require('./model-config.js');
+const {normalizeConfig,estimateParams,parameterBillions,modelCardCounts,findRequiredGpuCount,normalizeUtilization}=require('./model-config.js');
 
 const qwen36={
   architectures:['Qwen3_5ForConditionalGeneration'],model_type:'qwen3_5',tie_word_embeddings:false,
@@ -20,6 +20,55 @@ assert.strictEqual(model.attentionFactor,.25);
 assert.ok(model.stateBytesPerSequence>100*1024*1024,'linear-attention state cache must be included');
 assert.strictEqual(model.confidence,'verified');
 
+const kimiK3={
+  architectures:['KimiK3ForConditionalGeneration'],model_type:'kimi_k3',tie_word_embeddings:false,
+  text_config:{
+    hidden_size:7168,intermediate_size:33792,num_hidden_layers:93,num_attention_heads:96,num_key_value_heads:96,
+    vocab_size:163840,tie_word_embeddings:false,max_position_embeddings:1048576,first_k_dense_replace:1,moe_layer_freq:1,
+    num_experts:896,num_experts_per_token:16,num_shared_experts:2,moe_intermediate_size:3072,
+    routed_expert_hidden_size:3584,latent_moe_use_norm:true,q_lora_rank:1536,kv_lora_rank:512,
+    qk_nope_head_dim:128,qk_rope_head_dim:64,v_head_dim:128,mla_use_output_gate:true,attn_res_block_size:12,
+    linear_attn_config:{
+      full_attn_layers:[...Array.from({length:23},(_,i)=>(i+1)*4),93],
+      kda_layers:Array.from({length:91},(_,i)=>i+1).filter(i=>i%4!==0),
+      head_dim:128,num_heads:96,short_conv_kernel_size:4,use_full_rank_gate:true
+    }
+  }
+};
+
+const kimiEstimate=estimateParams(kimiK3);
+assert.strictEqual(kimiEstimate.moeLayers,92,'dense-prefix models must not apply MoE to every layer');
+assert.strictEqual(kimiEstimate.denseLayers,1);
+assert.strictEqual(kimiEstimate.expertInput,3584,'latent routed-expert width must override the transformer width');
+assert.strictEqual(kimiEstimate.shared,2,'num_shared_experts must be recognized');
+assert.strictEqual(kimiEstimate.fullLayers,24);
+assert.strictEqual(kimiEstimate.linearLayers,69);
+assert.ok(kimiEstimate.total>2750&&kimiEstimate.total<2820,`Kimi-K3 estimate should be near the published 2.8T, got ${kimiEstimate.total}`);
+assert.ok(kimiEstimate.active>102&&kimiEstimate.active<107,`Kimi-K3 active estimate should be near the published 104B, got ${kimiEstimate.active}`);
+
+const kimiModel=normalizeConfig('moonshotai/Kimi-K3',kimiK3,'ModelScope');
+assert.strictEqual(kimiModel.params,2779.48);
+assert.strictEqual(kimiModel.active,105.36);
+assert.strictEqual(kimiModel.headDim,128);
+assert.strictEqual(kimiModel.cacheType,'MoE + Hybrid: 24 full + 69 linear');
+assert.strictEqual(kimiModel.parameterMethod,'adaptive architecture estimate');
+assert.ok(kimiModel.stateBytesPerSequence>400*1024*1024,'KDA recurrent state must be represented in cache sizing');
+assert.ok(kimiModel.note.includes('latent experts 3584-wide'));
+
+const published=normalizeConfig('vendor/novel-model',{...kimiK3,total_parameters:'2.8T',activated_parameters:'104B'},'ModelScope');
+assert.strictEqual(published.params,2800,'machine-readable published totals must take precedence over estimates');
+assert.strictEqual(published.active,104,'machine-readable published active counts must take precedence over estimates');
+assert.strictEqual(published.confidence,'verified');
+assert.strictEqual(parameterBillions('2.8T'),2800);
+assert.strictEqual(parameterBillions('104B'),104);
+
+const cardCounts=modelCardCounts('<td><strong>Total Parameters</strong></td><td>2.8T</td><td>Activated Parameters</td><td>104B</td>');
+assert.deepStrictEqual(cardCounts,{total_parameters:'2.8T',activated_parameters:'104B'});
+const cardModel=normalizeConfig('moonshotai/Kimi-K3',{...kimiK3,model_card_counts:cardCounts},'ModelScope');
+assert.strictEqual(cardModel.params,2800);
+assert.strictEqual(cardModel.active,104);
+assert.strictEqual(cardModel.parameterMethod,'published model-card value');
+
 const overLimit=findRequiredGpuCount(64,n=>({meetsMemory:n>=73,meetsTps:true,capacity:n*24}));
 assert.strictEqual(overLimit.n,73,'must report the actual requirement beyond the configured maximum');
 assert.strictEqual(overLimit.exceedsMax,true);
@@ -37,4 +86,4 @@ assert.strictEqual(normalizeUtilization(''),.9,'blank select value must fall bac
 assert.strictEqual(normalizeUtilization('0'),.9,'zero utilization must be rejected');
 assert.strictEqual(normalizeUtilization('not-a-number',.85),.85,'invalid utilization must use the supplied fallback');
 
-console.log(JSON.stringify({status:'pass',params:model.params,active:model.active,layers:model.layers,cache:model.cacheType,stateMiB:+(model.stateBytesPerSequence/1024/1024).toFixed(1),architectureEstimateB:+estimate.total.toFixed(2),overLimitGpuDemand:overLimit.n,exactNonPowerOfTwoDemand:withinLimit.n,veryLargeGpuDemand:veryLarge.n,resetUtilization:normalizeUtilization('')}));
+console.log(JSON.stringify({status:'pass',params:model.params,active:model.active,layers:model.layers,cache:model.cacheType,stateMiB:+(model.stateBytesPerSequence/1024/1024).toFixed(1),architectureEstimateB:+estimate.total.toFixed(2),kimiTotalB:+kimiEstimate.total.toFixed(2),kimiActiveB:+kimiEstimate.active.toFixed(2),overLimitGpuDemand:overLimit.n,exactNonPowerOfTwoDemand:withinLimit.n,veryLargeGpuDemand:veryLarge.n,resetUtilization:normalizeUtilization('')}));

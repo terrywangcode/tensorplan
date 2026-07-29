@@ -208,20 +208,30 @@ async function fetchJson(url,timeout=9000){
   try{const res=await fetch(url,{signal:controller.signal,headers:{Accept:'application/json'}});if(!res.ok)throw new Error(`${res.status}`);return await res.json()}finally{clearTimeout(timer)}
 }
 
+async function fetchText(url,timeout=5000){
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeout);
+  try{const res=await fetch(url,{signal:controller.signal,headers:{Accept:'text/plain,text/markdown'}});if(!res.ok)throw new Error(`${res.status}`);return await res.text()}finally{clearTimeout(timer)}
+}
+
 async function lookup(){
   const id=$('modelIdInput').value.trim().replace(/^https?:\/\/(huggingface\.co|modelscope\.cn\/models)\//,'').replace(/\/$/,'');
   if(!id||!id.includes('/')){setLookup('Enter an owner/model repository ID.',true);return}
   $('lookupBtn').disabled=true; setLookup('Checking ModelScope…');
   const sources=[
-    ['ModelScope',`https://modelscope.cn/models/${id}/resolve/master/config.json`],
-    ['ModelScope',`https://www.modelscope.cn/models/${id}/resolve/master/config.json`],
-    ['Hugging Face',`https://huggingface.co/${id}/resolve/main/config.json`]
+    ['ModelScope',`https://modelscope.cn/models/${id}/resolve/master/config.json`,`https://modelscope.cn/models/${id}/resolve/master/README.md`],
+    ['ModelScope',`https://www.modelscope.cn/models/${id}/resolve/master/config.json`,`https://www.modelscope.cn/models/${id}/resolve/master/README.md`],
+    ['Hugging Face',`https://huggingface.co/${id}/resolve/main/config.json`,`https://huggingface.co/${id}/resolve/main/README.md`]
   ];
   let error;
-  for(const [source,url] of sources){
+  for(const [source,url,readmeUrl] of sources){
     try{
       if(source==='Hugging Face')setLookup('ModelScope unavailable. Trying Hugging Face…');
-      const config=await fetchJson(url); currentModel=TensorPlanConfig.normalizeConfig(id,config,source); MODELS.splice(MODELS.length-1,0,currentModel);
+      const config=await fetchJson(url);
+      try{
+        const counts=TensorPlanConfig.modelCardCounts(await fetchText(readmeUrl));
+        if(counts.total_parameters||counts.activated_parameters)config.model_card_counts=counts;
+      }catch(e){}
+      currentModel=TensorPlanConfig.normalizeConfig(id,config,source); MODELS.splice(MODELS.length-1,0,currentModel);
       const option=document.createElement('option');option.value=currentModel.id;option.textContent=`${currentModel.name} · live ${source}`;$('modelSelect').appendChild(option);$('modelSelect').value=currentModel.id;
       updateModelSummary();calculate();setLookup(`Loaded ${source} config · ${currentModel.layers} layers · ${fmt(currentModel.params)}B parameters · ${currentModel.parameterMethod}`);toast('Registry profile loaded');$('lookupBtn').disabled=false;return;
     }catch(e){error=e}

@@ -57,7 +57,7 @@ Always benchmark the exact checkpoint, runtime, prompt distribution, and samplin
 
 Static browser deployments depend on the registry permitting cross-origin configuration requests. Hugging Face generally supports this for public repositories. ModelScope availability may depend on its current browser-access policy or the user's network.
 
-When a repository does not publish an explicit parameter count, TensorPlan estimates it from architecture fields and clearly labels the confidence level.
+TensorPlan prefers machine-readable or model-card parameter counts when repositories publish them. Otherwise it adaptively estimates the architecture from common and emerging configuration fields, including dense-prefix MoE layouts, latent and shared experts, MLA, KDA, and hybrid attention layer maps, and clearly labels the confidence level.
 
 ## Contributing
 
